@@ -2147,9 +2147,13 @@ impl CreditLedger {
             facility_parent_account_set_id,
             collateral_parent_account_set_id,
             collateral_in_liquidation_parent_account_set_id,
+            liquidated_collateral_parent_account_set_id,
+            proceeds_from_liquidation_parent_account_set_id,
             interest_income_parent_account_set_id,
             fee_income_parent_account_set_id,
             payment_holding_parent_account_set_id,
+            disbursed_defaulted_parent_account_set_id,
+            interest_defaulted_parent_account_set_id,
             short_term_disbursed_integration_meta,
             long_term_disbursed_integration_meta,
             short_term_interest_integration_meta,
@@ -2209,6 +2213,27 @@ impl CreditLedger {
         .await?;
         self.attach_charts_account_set_in_op(
             op,
+            self.internal_account_sets
+                .liquidation
+                .liquidated_collateral
+                .id,
+            *liquidated_collateral_parent_account_set_id,
+            old_integration_config.map(|config| config.liquidated_collateral_parent_account_set_id),
+        )
+        .await?;
+        self.attach_charts_account_set_in_op(
+            op,
+            self.internal_account_sets
+                .liquidation
+                .proceeds_from_liquidation
+                .id,
+            *proceeds_from_liquidation_parent_account_set_id,
+            old_integration_config
+                .map(|config| config.proceeds_from_liquidation_parent_account_set_id),
+        )
+        .await?;
+        self.attach_charts_account_set_in_op(
+            op,
             self.internal_account_sets.interest_income.id,
             *interest_income_parent_account_set_id,
             old_integration_config.map(|config| config.interest_income_parent_account_set_id),
@@ -2226,6 +2251,20 @@ impl CreditLedger {
             self.internal_account_sets.payment_holding.id,
             *payment_holding_parent_account_set_id,
             old_integration_config.map(|config| config.payment_holding_parent_account_set_id),
+        )
+        .await?;
+        self.attach_charts_account_set_in_op(
+            op,
+            self.internal_account_sets.disbursed_defaulted.id,
+            *disbursed_defaulted_parent_account_set_id,
+            old_integration_config.map(|config| config.disbursed_defaulted_parent_account_set_id),
+        )
+        .await?;
+        self.attach_charts_account_set_in_op(
+            op,
+            self.internal_account_sets.interest_defaulted.id,
+            *interest_defaulted_parent_account_set_id,
+            old_integration_config.map(|config| config.interest_defaulted_parent_account_set_id),
         )
         .await?;
 
