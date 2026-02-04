@@ -3,12 +3,15 @@
 mod obligation;
 mod payment;
 mod payment_allocation;
+pub mod public;
 
 mod error;
-mod event;
 mod ledger;
 mod primitives;
 mod publisher;
+
+#[cfg(feature = "json-schema")]
+pub use obligation::ObligationEvent;
 
 use std::sync::Arc;
 
@@ -18,15 +21,11 @@ use es_entity::clock::ClockHandle;
 use obix::out::OutboxEventMarker;
 
 pub use error::CoreCreditCollectionError;
-pub use event::CoreCreditCollectionEvent;
 pub use obligation::{
-    NewObligation, Obligation, ObligationEvent, Obligations, error::ObligationError,
-    obligation_cursor,
+    NewObligation, Obligation, Obligations, error::ObligationError, obligation_cursor,
 };
-pub use payment::{Payment, PaymentEvent, PaymentLedgerAccountIds, Payments, error::PaymentError};
-pub use payment_allocation::{
-    PaymentAllocation, PaymentAllocationEvent, error::PaymentAllocationError,
-};
+pub use payment::{Payment, PaymentLedgerAccountIds, Payments, error::PaymentError};
+pub use payment_allocation::{PaymentAllocation, error::PaymentAllocationError};
 pub use primitives::{
     BalanceUpdateData, BalanceUpdatedSource, BeneficiaryId, CalaAccountId,
     CoreCreditCollectionAction, CoreCreditCollectionObject, ObligationAction, ObligationAllOrOne,
@@ -35,6 +34,7 @@ pub use primitives::{
     PERMISSION_SET_COLLECTION_WRITER, PaymentAllocationId, PaymentDetailsForAllocation, PaymentId,
     PaymentSourceAccountId,
 };
+pub use public::*;
 pub use publisher::CollectionPublisher;
 
 use ledger::CollectionLedger;

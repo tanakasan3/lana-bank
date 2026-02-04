@@ -15,6 +15,7 @@ use obix::out::{
     EphemeralOutboxEvent, Outbox, OutboxEvent, OutboxEventMarker, PersistentOutboxEvent,
 };
 
+use core_credit_collection::{PublicObligation, PublicPaymentAllocation};
 use core_custody::CoreCustodyEvent;
 use core_price::{CorePriceEvent, Price};
 
@@ -181,8 +182,14 @@ where
         }
 
         match message.as_event() {
-            Some(event @ CoreCreditCollectionEvent::ObligationCreated { beneficiary_id, .. })
-            | Some(event @ CoreCreditCollectionEvent::PaymentAllocated { beneficiary_id, .. }) => {
+            Some(
+                event @ (CoreCreditCollectionEvent::ObligationCreated {
+                    entity: PublicObligation { beneficiary_id, .. },
+                }
+                | CoreCreditCollectionEvent::PaymentAllocated {
+                    entity: PublicPaymentAllocation { beneficiary_id, .. },
+                }),
+            ) => {
                 message.inject_trace_parent();
                 let id = (*beneficiary_id).into();
                 Span::current().record("handled", true);
