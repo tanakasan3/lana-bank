@@ -6,7 +6,6 @@ import { gql } from "@apollo/client"
 import { useTranslations } from "next-intl"
 
 import { LiquidationDetailsCard } from "./details"
-import { LiquidationCreditFacilityCard } from "./credit-facility-card"
 import { LiquidationCollateralSentTable } from "./collateral-sent-table"
 import { LiquidationProceedsReceivedTable } from "./payment-received-table"
 
@@ -27,57 +26,11 @@ gql`
   fragment LiquidationDetails on Liquidation {
     id
     liquidationId
-    creditFacilityId
     expectedToReceive
     sentTotal
     amountReceived
     createdAt
     completed
-    creditFacility {
-      id
-      creditFacilityId
-      collateralId
-      publicId
-      status
-      collateralizationState
-      facilityAmount
-      activatedAt
-      maturesAt
-      currentCvl {
-        __typename
-        ... on FiniteCVLPct {
-          value
-        }
-        ... on InfiniteCVLPct {
-          isInfinite
-        }
-      }
-      creditFacilityTerms {
-        liquidationCvl {
-          __typename
-          ... on FiniteCVLPct {
-            value
-          }
-          ... on InfiniteCVLPct {
-            isInfinite
-          }
-        }
-      }
-      balance {
-        outstanding {
-          usdBalance
-        }
-        collateral {
-          btcBalance
-        }
-      }
-      customer {
-        customerId
-        publicId
-        customerType
-        email
-      }
-    }
     sentCollateral {
       ...LiquidationCollateralSentFragment
     }
@@ -115,7 +68,6 @@ function LiquidationPage({
   return (
     <main className="max-w-7xl m-auto space-y-2">
       <LiquidationDetailsCard liquidation={data.liquidation} />
-      <LiquidationCreditFacilityCard creditFacility={data.liquidation.creditFacility} />
       <div className="flex flex-col md:flex-row gap-2 items-start">
         <LiquidationCollateralSentTable
           collateralSent={data.liquidation.sentCollateral}

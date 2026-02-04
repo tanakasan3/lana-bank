@@ -13,7 +13,6 @@ import PaginatedTable, {
   PaginatedData,
 } from "@/components/paginated-table"
 import Balance from "@/components/balance/balance"
-import { PublicIdBadge } from "@/components/public-id-badge"
 import { Liquidation, useLiquidationsQuery } from "@/lib/graphql/generated"
 
 gql`
@@ -25,9 +24,6 @@ gql`
     amountReceived
     createdAt
     completed
-    creditFacility {
-      publicId
-    }
   }
 
   query Liquidations($first: Int!, $after: String) {
@@ -60,14 +56,6 @@ const LiquidationsList = () => {
       label: t("table.headers.status"),
       render: (completed) => <LiquidationStatusBadge completed={completed} />,
     },
-    {
-      key: "creditFacility",
-      label: t("table.headers.creditFacility"),
-      render: (creditFacility) => (
-        <PublicIdBadge publicId={String(creditFacility.publicId)} />
-      ),
-    },
-
     {
       key: "expectedToReceive",
       label: t("table.headers.expectedToReceive"),
