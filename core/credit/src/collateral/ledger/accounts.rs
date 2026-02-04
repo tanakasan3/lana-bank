@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ledger::FacilityProceedsFromLiquidationAccountId, ledger::PendingCreditFacilityAccountIds,
+    ledger::{FacilityProceedsFromLiquidationAccountId, PendingCreditFacilityAccountIds},
     primitives::CalaAccountId,
 };
 
