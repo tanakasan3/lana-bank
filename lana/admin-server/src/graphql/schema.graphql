@@ -646,7 +646,6 @@ type CreditFacilityLedgerAccounts {
 	disbursedReceivableOverdueAccountId: UUID!
 	disbursedDefaultedAccountId: UUID!
 	collateralAccountId: UUID!
-	collateralInLiquidationAccountId: UUID!
 	proceedsFromLiquidationAccountId: UUID!
 	interestReceivableNotYetDueAccountId: UUID!
 	interestReceivableDueAccountId: UUID!
@@ -662,7 +661,6 @@ type CreditFacilityLedgerAccounts {
 	disbursedReceivableOverdueAccount: LedgerAccount!
 	disbursedDefaultedAccount: LedgerAccount!
 	collateralAccount: LedgerAccount!
-	collateralInLiquidationAccount: LedgerAccount!
 	proceedsFromLiquidationAccount: LedgerAccount!
 	interestReceivableNotYetDueAccount: LedgerAccount!
 	interestReceivableDueAccount: LedgerAccount!
@@ -1737,13 +1735,11 @@ union LedgerTransactionInitiator = User | System
 type Liquidation {
 	id: ID!
 	liquidationId: UUID!
-	creditFacilityId: UUID!
 	expectedToReceive: UsdCents!
 	sentTotal: Satoshis!
 	amountReceived: UsdCents!
 	createdAt: Timestamp!
 	completed: Boolean!
-	creditFacility: CreditFacility!
 	sentCollateral: [LiquidationCollateralSent!]!
 	receivedProceeds: [LiquidationProceedsReceived!]!
 }
