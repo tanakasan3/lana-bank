@@ -137,6 +137,32 @@ has_bigquery_credentials() {
     skip "Skipping - requires BigQuery credentials"
   fi
 
+  # Track which sensor we started so we can stop it later
+  local active_sensor_name=""
+
+  # Helper function to stop the sensor (called at end of test)
+  stop_automation_sensor() {
+    if [ -n "$active_sensor_name" ]; then
+      echo "Stopping sensor: $active_sensor_name"
+      local stop_vars=$(jq -n --arg name "$active_sensor_name" '{
+        sensorSelector: {
+          repositoryLocationName: "Lana DW",
+          repositoryName: "__repository__",
+          sensorName: $name
+        }
+      }')
+      exec_dagster_graphql "stop_sensor" "$stop_vars"
+      if dagster_validate_json; then
+        local stop_status=$(echo "$output" | jq -r '.data.stopSensor.__typename // empty')
+        if [ "$stop_status" = "Sensor" ]; then
+          echo "Successfully stopped sensor: $active_sensor_name"
+        else
+          echo "Warning: Failed to stop sensor: $stop_status"
+        fi
+      fi
+    fi
+  }
+
   sensor_vars=$(jq -n '{
     sensorSelector: {
       repositoryLocationName: "Lana DW",
@@ -160,6 +186,13 @@ has_bigquery_credentials() {
     exec_dagster_graphql "start_sensor" "$sensor_vars"
     dagster_validate_json || return 1
     sensor_status=$(echo "$output" | jq -r '.data.startSensor.__typename // empty')
+    if [ "$sensor_status" = "Sensor" ]; then
+      active_sensor_name="default_automation_condition_sensor"
+    fi
+  else
+    if [ "$sensor_status" = "Sensor" ]; then
+      active_sensor_name="dbt_automation_condition_sensor"
+    fi
   fi
   
   if [ "$sensor_status" != "Sensor" ]; then
@@ -243,10 +276,12 @@ has_bigquery_credentials() {
     echo "$initial_run_ids"
     echo "Current downstream run IDs:"
     echo "$current_run_ids"
+    stop_automation_sensor
     return 1
   fi
   
   echo "Downstream dbt asset automatically started (run ID: $new_run_id) after upstream completion"
+  stop_automation_sensor
 }
 
 @test "dagster: verify dbt seed asset static_ncf_01_03_row_titles_seed exists" {
