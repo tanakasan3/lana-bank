@@ -387,7 +387,8 @@ EOF
     # - int_customer_identities, int_loan_status_change, int_loan_statements, int_loan_portfolio
     # - int_nrsf_* and int_nrp_* (regulatory reports depending on customer identities)
     # - report_reporte_de_cambios_de_estado, report_other_estado_de_cuenta, report_other_reporte_de_cartera
-    remaining_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[2] | (test("sumsub"; "i") or test("customer_identities") or test("loan_status_change") or test("loan_statements") or test("loan_portfolio") or test("^int_nrsf_") or test("^int_nrp_") or test("reporte_de_cambios_de_estado") or test("estado_de_cuenta_de_prestamo") or test("reporte_de_cartera_de_prestamos")) | not))]')
+    # Note: use .[-1] to get the model name (last path element) since some paths have subdirs
+    remaining_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[-1] | (test("sumsub"; "i") or test("customer_identities") or test("loan_status_change") or test("loan_statements") or test("loan_portfolio") or test("^int_nrsf_") or test("^int_nrp_") or test("reporte_de_cambios_de_estado") or test("estado_de_cuenta_de_prestamo") or test("reporte_de_cartera_de_prestamos")) | not))]')
   fi
   
   remaining_count=$(echo "$remaining_assets" | jq 'length')
@@ -419,7 +420,7 @@ EOF
           repositoryLocationName: "Lana DW",
           repositoryName: "__repository__",
           jobName: "__ASSET_JOB",
-          assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[2] | (test("sumsub"; "i") or test("customer_identities") or test("loan_status_change") or test("loan_statements") or test("loan_portfolio") or test("^int_nrsf_") or test("^int_nrp_") or test("reporte_de_cambios_de_estado") or test("estado_de_cuenta_de_prestamo") or test("reporte_de_cartera_de_prestamos")) | not)) | {path: .}]
+          assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[-1] | (test("sumsub"; "i") or test("customer_identities") or test("loan_status_change") or test("loan_statements") or test("loan_portfolio") or test("^int_nrsf_") or test("^int_nrp_") or test("reporte_de_cambios_de_estado") or test("estado_de_cuenta_de_prestamo") or test("reporte_de_cartera_de_prestamos")) | not)) | {path: .}]
         },
         runConfigData: {}
       }
