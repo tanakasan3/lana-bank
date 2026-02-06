@@ -299,9 +299,14 @@ EOF
   exec_dagster_graphql "assets"
   dagster_validate_json || return 1
 
-  # Filter for staging models only (path contains "staging")
-  # Staging models are the first layer that reads directly from sources
-  staging_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and (.[1] == "staging" or .[1] == "seeds"))]')
+  # Filter for staging models only (not seeds)
+  # Skip sumsub models if credentials are not available
+  if has_sumsub_credentials; then
+    staging_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] == "staging")]')
+  else
+    echo "Skipping sumsub staging models (SUMSUB_KEY or SUMSUB_SECRET not set)"
+    staging_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] == "staging" and (.[2] | test("sumsub"; "i") | not))]')
+  fi
   
   staging_count=$(echo "$staging_assets" | jq 'length')
   
@@ -310,20 +315,34 @@ EOF
     return 1
   fi
 
-  echo "Found $staging_count dbt staging/seed assets to materialize"
+  echo "Found $staging_count dbt staging assets to materialize"
 
   # Build asset selection for staging models
-  run_variables=$(echo "$output" | jq '{
-    executionParams: {
-      selector: {
-        repositoryLocationName: "Lana DW",
-        repositoryName: "__repository__",
-        jobName: "__ASSET_JOB",
-        assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and (.[1] == "staging" or .[1] == "seeds")) | {path: .}]
-      },
-      runConfigData: {}
-    }
-  }')
+  if has_sumsub_credentials; then
+    run_variables=$(echo "$output" | jq '{
+      executionParams: {
+        selector: {
+          repositoryLocationName: "Lana DW",
+          repositoryName: "__repository__",
+          jobName: "__ASSET_JOB",
+          assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] == "staging") | {path: .}]
+        },
+        runConfigData: {}
+      }
+    }')
+  else
+    run_variables=$(echo "$output" | jq '{
+      executionParams: {
+        selector: {
+          repositoryLocationName: "Lana DW",
+          repositoryName: "__repository__",
+          jobName: "__ASSET_JOB",
+          assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] == "staging" and (.[2] | test("sumsub"; "i") | not)) | {path: .}]
+        },
+        runConfigData: {}
+      }
+    }')
+  fi
 
   exec_dagster_graphql "launch_run" "$run_variables"
   dagster_check_launch_run_errors || return 1
@@ -359,7 +378,13 @@ EOF
 
   # Filter for non-staging models (marts, intermediate, etc.)
   # These depend on staging models which should have been materialized in the previous test
-  remaining_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds")]')
+  # Skip sumsub models if credentials are not available
+  if has_sumsub_credentials; then
+    remaining_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds")]')
+  else
+    echo "Skipping sumsub models (SUMSUB_KEY or SUMSUB_SECRET not set)"
+    remaining_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[2] | test("sumsub"; "i") | not))]')
+  fi
   
   remaining_count=$(echo "$remaining_assets" | jq 'length')
   
@@ -371,17 +396,31 @@ EOF
   echo "Found $remaining_count remaining dbt assets to materialize"
 
   # Build asset selection for remaining models
-  run_variables=$(echo "$output" | jq '{
-    executionParams: {
-      selector: {
-        repositoryLocationName: "Lana DW",
-        repositoryName: "__repository__",
-        jobName: "__ASSET_JOB",
-        assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds") | {path: .}]
-      },
-      runConfigData: {}
-    }
-  }')
+  if has_sumsub_credentials; then
+    run_variables=$(echo "$output" | jq '{
+      executionParams: {
+        selector: {
+          repositoryLocationName: "Lana DW",
+          repositoryName: "__repository__",
+          jobName: "__ASSET_JOB",
+          assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds") | {path: .}]
+        },
+        runConfigData: {}
+      }
+    }')
+  else
+    run_variables=$(echo "$output" | jq '{
+      executionParams: {
+        selector: {
+          repositoryLocationName: "Lana DW",
+          repositoryName: "__repository__",
+          jobName: "__ASSET_JOB",
+          assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[2] | test("sumsub"; "i") | not)) | {path: .}]
+        },
+        runConfigData: {}
+      }
+    }')
+  fi
 
   exec_dagster_graphql "launch_run" "$run_variables"
   dagster_check_launch_run_errors || return 1
