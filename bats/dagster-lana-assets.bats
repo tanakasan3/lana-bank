@@ -42,8 +42,8 @@ LANA_ASSETS=(
 )
 
 # Bitfinex source assets
+# Note: bitfinex_order_book_dlt excluded (not currently in use)
 BITFINEX_ASSETS=(
-  "bitfinex_order_book_dlt"
   "bitfinex_ticker_dlt"
   "bitfinex_trades_dlt"
 )
@@ -301,7 +301,8 @@ EOF
 
   # Filter for staging models only (path contains "staging")
   # Staging models are the first layer that reads directly from sources
-  staging_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and (.[1] == "staging" or .[1] == "seeds"))]')
+  # Note: exclude order_book related assets (not currently in use)
+  staging_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and (.[1] == "staging" or .[1] == "seeds") and (.[2] | tostring | contains("order_book") | not))]')
   
   staging_count=$(echo "$staging_assets" | jq 'length')
   
@@ -312,14 +313,14 @@ EOF
 
   echo "Found $staging_count dbt staging/seed assets to materialize"
 
-  # Build asset selection for staging models
+  # Build asset selection for staging models (excluding order_book)
   run_variables=$(echo "$output" | jq '{
     executionParams: {
       selector: {
         repositoryLocationName: "Lana DW",
         repositoryName: "__repository__",
         jobName: "__ASSET_JOB",
-        assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and (.[1] == "staging" or .[1] == "seeds")) | {path: .}]
+        assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and (.[1] == "staging" or .[1] == "seeds") and (.[2] | tostring | contains("order_book") | not)) | {path: .}]
       },
       runConfigData: {}
     }
@@ -359,7 +360,8 @@ EOF
 
   # Filter for non-staging models (marts, intermediate, etc.)
   # These depend on staging models which should have been materialized in the previous test
-  remaining_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds")]')
+  # Note: exclude order_book related assets (not currently in use)
+  remaining_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[2] | tostring | contains("order_book") | not))]')
   
   remaining_count=$(echo "$remaining_assets" | jq 'length')
   
@@ -370,14 +372,14 @@ EOF
 
   echo "Found $remaining_count remaining dbt assets to materialize"
 
-  # Build asset selection for remaining models
+  # Build asset selection for remaining models (excluding order_book)
   run_variables=$(echo "$output" | jq '{
     executionParams: {
       selector: {
         repositoryLocationName: "Lana DW",
         repositoryName: "__repository__",
         jobName: "__ASSET_JOB",
-        assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds") | {path: .}]
+        assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[2] | tostring | contains("order_book") | not)) | {path: .}]
       },
       runConfigData: {}
     }
