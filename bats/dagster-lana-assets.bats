@@ -13,6 +13,62 @@ has_sumsub_credentials() {
   [[ -n "${SUMSUB_KEY:-}" && -n "${SUMSUB_SECRET:-}" ]]
 }
 
+# Models that depend on Sumsub data (to skip when credentials unavailable)
+# Staging models
+SUMSUB_STAGING_MODELS=(
+  "stg_sumsub_applicants"
+)
+
+# Intermediate and output models that depend on Sumsub
+SUMSUB_DEPENDENT_MODELS=(
+  "int_sumsub_applicants"
+  "int_customer_identities"
+  "int_loan_status_change"
+  "int_loan_statements"
+  "int_loan_portfolio"
+  "int_nrsf_03_01_cliente"
+  "int_nrsf_03_03_documentos_clientes"
+  "int_nrsf_03_05_agencias"
+  "int_nrsf_03_07_funcionarios_y_empleados"
+  "int_nrsf_03_08_resumen_de_depositos_garantizados"
+  "int_nrp_41_01_persona"
+  "report_reporte_de_cambios_de_estado"
+  "report_other_estado_de_cuenta_de_prestamo"
+  "report_other_reporte_de_cartera_de_prestamos"
+)
+
+# Build jq filter array for sumsub staging models
+sumsub_staging_jq_array() {
+  local arr='['
+  local first=true
+  for model in "${SUMSUB_STAGING_MODELS[@]}"; do
+    if [ "$first" = true ]; then
+      first=false
+    else
+      arr+=','
+    fi
+    arr+="\"$model\""
+  done
+  arr+=']'
+  echo "$arr"
+}
+
+# Build jq filter array for sumsub dependent models
+sumsub_dependent_jq_array() {
+  local arr='['
+  local first=true
+  for model in "${SUMSUB_DEPENDENT_MODELS[@]}"; do
+    if [ "$first" = true ]; then
+      first=false
+    else
+      arr+=','
+    fi
+    arr+="\"$model\""
+  done
+  arr+=']'
+  echo "$arr"
+}
+
 # Lana source assets
 LANA_ASSETS=(
   "inbox_events"
@@ -305,7 +361,9 @@ EOF
     staging_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] == "staging")]')
   else
     echo "Skipping sumsub staging models (SUMSUB_KEY or SUMSUB_SECRET not set)"
-    staging_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] == "staging" and (.[2] | test("sumsub"; "i") | not))]')
+    local skip_models
+    skip_models=$(sumsub_staging_jq_array)
+    staging_assets=$(echo "$output" | jq -c --argjson skip "$skip_models" '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] == "staging" and (.[-1] | IN($skip[]) | not))]')
   fi
   
   staging_count=$(echo "$staging_assets" | jq 'length')
@@ -331,13 +389,15 @@ EOF
       }
     }')
   else
-    run_variables=$(echo "$output" | jq '{
+    local skip_models
+    skip_models=$(sumsub_staging_jq_array)
+    run_variables=$(echo "$output" | jq --argjson skip "$skip_models" '{
       executionParams: {
         selector: {
           repositoryLocationName: "Lana DW",
           repositoryName: "__repository__",
           jobName: "__ASSET_JOB",
-          assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] == "staging" and (.[2] | test("sumsub"; "i") | not)) | {path: .}]
+          assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] == "staging" and (.[-1] | IN($skip[]) | not)) | {path: .}]
         },
         runConfigData: {}
       }
@@ -383,12 +443,9 @@ EOF
     remaining_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds")]')
   else
     echo "Skipping sumsub models and downstream dependents (SUMSUB_KEY or SUMSUB_SECRET not set)"
-    # Skip models that contain "sumsub" or depend on sumsub data:
-    # - int_customer_identities, int_loan_status_change, int_loan_statements, int_loan_portfolio
-    # - int_nrsf_* and int_nrp_* (regulatory reports depending on customer identities)
-    # - report_reporte_de_cambios_de_estado, report_other_estado_de_cuenta, report_other_reporte_de_cartera
-    # Note: use .[-1] to get the model name (last path element) since some paths have subdirs
-    remaining_assets=$(echo "$output" | jq -c '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[-1] | (test("sumsub"; "i") or test("customer_identities") or test("loan_status_change") or test("loan_statements") or test("loan_portfolio") or test("^int_nrsf_") or test("^int_nrp_") or test("reporte_de_cambios_de_estado") or test("estado_de_cuenta_de_prestamo") or test("reporte_de_cartera_de_prestamos")) | not))]')
+    local skip_models
+    skip_models=$(sumsub_dependent_jq_array)
+    remaining_assets=$(echo "$output" | jq -c --argjson skip "$skip_models" '[.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[-1] | IN($skip[]) | not))]')
   fi
   
   remaining_count=$(echo "$remaining_assets" | jq 'length')
@@ -414,13 +471,15 @@ EOF
       }
     }')
   else
-    run_variables=$(echo "$output" | jq '{
+    local skip_models
+    skip_models=$(sumsub_dependent_jq_array)
+    run_variables=$(echo "$output" | jq --argjson skip "$skip_models" '{
       executionParams: {
         selector: {
           repositoryLocationName: "Lana DW",
           repositoryName: "__repository__",
           jobName: "__ASSET_JOB",
-          assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[-1] | (test("sumsub"; "i") or test("customer_identities") or test("loan_status_change") or test("loan_statements") or test("loan_portfolio") or test("^int_nrsf_") or test("^int_nrp_") or test("reporte_de_cambios_de_estado") or test("estado_de_cuenta_de_prestamo") or test("reporte_de_cartera_de_prestamos")) | not)) | {path: .}]
+          assetSelection: [.data.assetsOrError.nodes[]?.key.path | select(.[0] == "dbt_lana_dw" and .[1] != "staging" and .[1] != "seeds" and (.[-1] | IN($skip[]) | not)) | {path: .}]
         },
         runConfigData: {}
       }
