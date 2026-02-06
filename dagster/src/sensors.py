@@ -1,7 +1,8 @@
 from typing import Sequence
 
 import dagster as dg
-from src.assets.dbt import TAG_KEY_ASSET_TYPE, TAG_VALUE_DBT_MODEL
+from src.assets.dbt import TAG_KEY_ASSET_TYPE, TAG_VALUE_DBT_MODEL, TAG_VALUE_DBT_SEED
+from src.assets.lana import EL_TARGET_ASSET_DESCRIPTION
 from src.otel import JOB_TRACEPARENT_TAG
 
 
@@ -61,6 +62,36 @@ def build_dbt_automation_sensor(
     return dg.AutomationConditionSensorDefinition(
         name="dbt_automation_condition_sensor",
         target=dg.AssetSelection.tag(TAG_KEY_ASSET_TYPE, TAG_VALUE_DBT_MODEL),
+        default_status=(
+            dg.DefaultSensorStatus.RUNNING
+            if dagster_automations_active
+            else dg.DefaultSensorStatus.STOPPED
+        ),
+    )
+
+
+def build_dbt_seed_automation_sensor(
+    dagster_automations_active: bool,
+) -> dg.AutomationConditionSensorDefinition:
+    """Automation sensor for dbt seeds - triggers on_missing and on_cron."""
+    return dg.AutomationConditionSensorDefinition(
+        name="dbt_seed_automation_condition_sensor",
+        target=dg.AssetSelection.tag(TAG_KEY_ASSET_TYPE, TAG_VALUE_DBT_SEED),
+        default_status=(
+            dg.DefaultSensorStatus.RUNNING
+            if dagster_automations_active
+            else dg.DefaultSensorStatus.STOPPED
+        ),
+    )
+
+
+def build_lana_el_automation_sensor(
+    dagster_automations_active: bool,
+) -> dg.AutomationConditionSensorDefinition:
+    """Automation sensor for lana EL assets - triggers on_missing and on_cron."""
+    return dg.AutomationConditionSensorDefinition(
+        name="lana_el_automation_condition_sensor",
+        target=dg.AssetSelection.tag(TAG_KEY_ASSET_TYPE, EL_TARGET_ASSET_DESCRIPTION),
         default_status=(
             dg.DefaultSensorStatus.RUNNING
             if dagster_automations_active
