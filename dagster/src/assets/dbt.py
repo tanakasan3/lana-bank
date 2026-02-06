@@ -144,9 +144,16 @@ class LanaDbtTranslator(DagsterDbtTranslator):
         """Set automation condition based on resource type."""
         resource_type = dbt_resource_props.get(DbtPropKey.RESOURCE_TYPE)
 
-        # Only models get eager automation, seeds run on schedule
+        # Models: eager (run when upstream changes)
         if resource_type == DbtResourceType.MODEL:
             return dg.AutomationCondition.eager()
+
+        # Seeds: run on first startup (missing) OR on daily schedule
+        if resource_type == DbtResourceType.SEED:
+            return (
+                dg.AutomationCondition.on_missing()
+                | dg.AutomationCondition.on_cron("0 0 * * *")
+            )
 
         return None
 

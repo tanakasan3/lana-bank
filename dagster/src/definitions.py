@@ -25,7 +25,9 @@ from src.otel import init_telemetry
 from src.resources import get_project_resources
 from src.sensors import (
     build_dbt_automation_sensor,
+    build_dbt_seed_automation_sensor,
     build_file_report_sensors,
+    build_lana_el_automation_sensor,
     build_sumsub_sensor,
 )
 
@@ -175,7 +177,13 @@ lana_to_dw_el_job = definition_builder.add_job_from_assets(
     job_name="lana_to_dw_el",
     assets=tuple(lana_to_dw_el_assets),
 )
-definition_builder.add_job_schedule(job=lana_to_dw_el_job, cron_expression="0 0 * * *")
+# Note: Schedule removed - automation condition handles on_missing + on_cron
+
+# Automation sensor for lana EL assets (triggers on_missing and daily cron)
+lana_el_automation_sensor = build_lana_el_automation_sensor(
+    dagster_automations_active=DAGSTER_AUTOMATIONS_ACTIVE
+)
+definition_builder.add_sensor(lana_el_automation_sensor)
 
 lana_dbt_models = create_dbt_model_assets()
 definition_builder.assets.append(lana_dbt_models)
@@ -193,7 +201,13 @@ dbt_seeds_job = dg.define_asset_job(
     selection=dg.AssetSelection.assets(lana_dbt_seeds),
 )
 definition_builder.jobs.append(dbt_seeds_job)
-definition_builder.add_job_schedule(job=dbt_seeds_job, cron_expression="0 0 * * *")
+# Note: Schedule removed - automation condition handles on_missing + on_cron
+
+# Automation sensor for dbt seeds (triggers on_missing and daily cron)
+dbt_seed_automation_sensor = build_dbt_seed_automation_sensor(
+    dagster_automations_active=DAGSTER_AUTOMATIONS_ACTIVE
+)
+definition_builder.add_sensor(dbt_seed_automation_sensor)
 
 file_report_protoassets_list = generated_file_report_protoassets()
 
