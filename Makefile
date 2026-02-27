@@ -202,6 +202,53 @@ dagster-materialize-all: dagster-materialize-el dagster-materialize-dbt-seeds da
 dagster-refresh: dagster-materialize-el dagster-materialize-dbt-models
 	@echo "Refresh complete."
 
+# ── Dagster with Postgres DW (local dev) ──────────────────────────────────────
+# Use these targets for local development with Postgres instead of BigQuery
+
+dagster-postgres-up:
+	docker compose -f docker-compose.dagster-postgres.yml up -d --build
+
+dagster-postgres-stop:
+	docker compose -f docker-compose.dagster-postgres.yml stop
+
+dagster-postgres-down:
+	docker compose -f docker-compose.dagster-postgres.yml down
+
+dagster-postgres-down-clean:
+	docker compose -f docker-compose.dagster-postgres.yml down -v
+
+dagster-postgres-logs:
+	docker compose -f docker-compose.dagster-postgres.yml logs -f
+
+# Asset materialization for Postgres DW target
+dagster-postgres-materialize-el:
+	@echo "Materializing EL raw tables (lana → Postgres DW)..."
+	docker compose -f docker-compose.dagster-postgres.yml exec -T dagster_webserver \
+		dagster job execute -j lana_to_dw_el -w workspace.yaml
+
+dagster-postgres-materialize-dbt-seeds:
+	@echo "Materializing dbt seeds..."
+	docker compose -f docker-compose.dagster-postgres.yml exec -T dagster_webserver \
+		dagster job execute -j dbt_seeds_job -w workspace.yaml
+
+dagster-postgres-materialize-dbt-models:
+	@echo "Materializing dbt models..."
+	docker compose -f docker-compose.dagster-postgres.yml exec -T dagster_webserver \
+		dagster job execute -j dbt_models_job -w workspace.yaml
+
+# Full materialization in dependency order (cold start) - Postgres
+dagster-postgres-materialize-all: dagster-postgres-materialize-el dagster-postgres-materialize-dbt-seeds dagster-postgres-materialize-dbt-models
+	@echo "All assets materialized successfully (Postgres DW)."
+
+# Quick refresh for Postgres DW
+dagster-postgres-refresh: dagster-postgres-materialize-el dagster-postgres-materialize-dbt-models
+	@echo "Refresh complete (Postgres DW)."
+
+# Connect to Postgres DW for debugging
+dagster-postgres-psql:
+	docker compose -f docker-compose.dagster-postgres.yml exec lana-dw-postgres \
+		psql -U postgres -d lana_dw
+
 # Usage: make dbt ARGS="run -s my_model"
 dbt:
 	docker compose -f docker-compose.dagster.yml run --rm --no-deps \

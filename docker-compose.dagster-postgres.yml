@@ -1,0 +1,139 @@
+# Dagster with Postgres Data Warehouse target
+# Use this for local development instead of BigQuery
+
+x-hostgw: &hostgw
+  extra_hosts:
+    - "host.containers.internal:host-gateway"
+
+x-dw-postgres-env: &dw-postgres-env
+  DW_TARGET: postgres
+  DW_RAW_SCHEMA: lana_raw
+  DW_DBT_SCHEMA: lana_dbt
+  DW_PG_HOST: lana-dw-postgres
+  DW_PG_PORT: "5432"
+  DW_PG_DATABASE: lana_dw
+  DW_PG_USER: postgres
+  DW_PG_PASSWORD: postgres
+
+services:
+  # Postgres database for the Data Warehouse (raw + dbt schemas)
+  lana-dw-postgres:
+    image: postgres:15
+    container_name: lana-dw-postgres
+    environment:
+      POSTGRES_DB: lana_dw
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"  # Expose on 5433 to avoid conflict with lana-core postgres
+    volumes:
+      - lana-dw-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lana_dw"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Init container to create schemas
+  lana-dw-init:
+    image: postgres:15
+    container_name: lana-dw-init
+    depends_on:
+      lana-dw-postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: lana-dw-postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: lana_dw
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        psql -c "CREATE SCHEMA IF NOT EXISTS lana_raw;"
+        psql -c "CREATE SCHEMA IF NOT EXISTS lana_dbt;"
+        echo "Schemas created successfully"
+    restart: "no"
+
+  dagster-code-location-lana-dw:
+    <<: *hostgw
+    build:
+      context: ./dagster
+      dockerfile: Dockerfile
+    image: dagster-code-location-lana-dw:latest
+    container_name: dagster-code-location-lana-dw
+    restart: always
+    environment:
+      <<: *dw-postgres-env
+      DAGSTER_POSTGRES_USER: postgres_user
+      DAGSTER_POSTGRES_PASSWORD: postgres_password
+      DAGSTER_POSTGRES_DB: postgres_db
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+      DAGSTER_AUTOMATIONS_ACTIVE: ${DAGSTER_AUTOMATIONS_ACTIVE:-}
+      LANA_PG_CON: postgres://user:password@core-pg:5432/pg
+    depends_on:
+      lana-dw-postgres:
+        condition: service_healthy
+
+  dagster_webserver:
+    build:
+      context: ./dagster
+      dockerfile: Dockerfile_dagster
+    entrypoint:
+      - dagster-webserver
+      - -h
+      - "0.0.0.0"
+      - -p
+      - "3000"
+      - -w
+      - workspace.yaml
+    container_name: dagster_webserver
+    expose:
+      - "3000"
+    ports:
+      - "3000:3000"
+    environment:
+      DAGSTER_POSTGRES_USER: postgres_user
+      DAGSTER_POSTGRES_PASSWORD: postgres_password
+      DAGSTER_POSTGRES_DB: postgres_db
+    volumes:
+      - /tmp/io_manager_storage:/tmp/io_manager_storage
+    depends_on:
+      dagster_postgres:
+        condition: service_started
+      dagster-code-location-lana-dw:
+        condition: service_started
+
+  dagster_daemon:
+    <<: *hostgw
+    build:
+      context: ./dagster
+      dockerfile: Dockerfile_dagster
+    entrypoint:
+      - dagster-daemon
+      - run
+    container_name: dagster_daemon
+    restart: on-failure
+    environment:
+      DAGSTER_POSTGRES_USER: postgres_user
+      DAGSTER_POSTGRES_PASSWORD: postgres_password
+      DAGSTER_POSTGRES_DB: postgres_db
+      LANA_ADMIN_SERVER_URL: http://host.containers.internal:5253
+    volumes:
+      - /tmp/io_manager_storage:/tmp/io_manager_storage
+    depends_on:
+      dagster_postgres:
+        condition: service_started
+      dagster-code-location-lana-dw:
+        condition: service_started
+
+  # Dagster metadata database (separate from DW)
+  dagster_postgres:
+    image: postgres:15
+    container_name: dagster_postgres
+    environment:
+      POSTGRES_USER: postgres_user
+      POSTGRES_PASSWORD: postgres_password
+      POSTGRES_DB: postgres_db
+
+volumes:
+  lana-dw-postgres-data:
