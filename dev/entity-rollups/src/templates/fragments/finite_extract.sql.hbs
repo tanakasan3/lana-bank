@@ -1,0 +1,8 @@
+CASE
+      WHEN {{nested_json_extract this.json_path true}} IS NULL THEN NULL
+      WHEN jsonb_typeof({{nested_json_extract this.json_path true}}) = 'string'
+        AND ({{nested_json_extract this.json_path false}}) = 'Infinite' THEN NULL
+      WHEN jsonb_typeof({{nested_json_extract this.json_path true}}) = 'object' THEN
+        ({{nested_json_extract this.json_path true}} ->> 'Finite')::NUMERIC
+      ELSE NULL
+    END

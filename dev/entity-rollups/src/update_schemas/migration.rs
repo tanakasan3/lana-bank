@@ -49,6 +49,7 @@ struct ComputedFieldAction {
     element_cast_type: Option<String>,
     is_jsonb_array: bool,
     is_toggle_field: bool,
+    is_finite_pattern: bool,
     // Computed action flags
     is_field_update: bool,
     is_field_removal: bool,
@@ -92,6 +93,7 @@ struct FieldDefinition {
     is_jsonb_array: bool,
     is_toggle_field: bool,
     toggle_events: Option<Vec<String>>,
+    is_finite_pattern: bool,
 }
 
 fn compute_event_updates(
@@ -117,6 +119,7 @@ fn compute_event_updates(
                 element_cast_type: field.element_cast_type.clone(),
                 is_jsonb_array: field.is_jsonb_array,
                 is_toggle_field: field.is_toggle_field,
+                is_finite_pattern: field.is_finite_pattern,
                 is_field_update: false,
                 is_field_removal: false,
                 is_set_add: false,
@@ -223,6 +226,7 @@ pub fn generate_rollup_migrations(
     let field_removal_fragment = include_str!("../templates/fragments/field_removal.sql.hbs");
     let field_preserve_fragment = include_str!("../templates/fragments/field_preserve.sql.hbs");
     let toggle_set_fragment = include_str!("../templates/fragments/toggle_set.sql.hbs");
+    let finite_extract_fragment = include_str!("../templates/fragments/finite_extract.sql.hbs");
 
     let mut handlebars = Handlebars::new();
     handlebars.register_helper(
@@ -403,6 +407,7 @@ pub fn generate_rollup_migrations(
     handlebars.register_template_string("field_removal", field_removal_fragment)?;
     handlebars.register_template_string("field_preserve", field_preserve_fragment)?;
     handlebars.register_template_string("toggle_set", toggle_set_fragment)?;
+    handlebars.register_template_string("finite_extract", finite_extract_fragment)?;
 
     for schema_change in schema_changes {
         let schema_info = &schema_change.schema_info;
@@ -741,6 +746,9 @@ fn extract_fields_and_events_from_schema(
         // Determine if this field should use JSONB extraction (-> operator vs ->> operator)
         let is_jsonb_field = sql_type == "JSONB";
 
+        // Detect Finite/Infinite pattern by resolving the field's $ref
+        let is_finite_pattern = detect_finite_pattern_for_field(prop_schema, schema);
+
         fields.push(FieldDefinition {
             name: to_snake_case(name),
             sql_type,
@@ -758,6 +766,7 @@ fn extract_fields_and_events_from_schema(
             is_jsonb_array,
             is_toggle_field: false,
             toggle_events: None,
+            is_finite_pattern,
         });
     }
 
@@ -788,6 +797,7 @@ fn extract_fields_and_events_from_schema(
                 is_jsonb_array: false,
                 is_toggle_field: true,
                 toggle_events: Some(vec![toggle_event.to_string()]),
+                is_finite_pattern: false,
             });
         }
     }
@@ -820,6 +830,83 @@ fn extract_fields_and_events_from_schema(
     // Keep event types in schema order (don't sort)
 
     Ok((fields, event_types))
+}
+
+/// Detects the Rust `enum Foo { Finite(Decimal), Infinite }` JSON schema pattern:
+///
+/// ```json
+/// {
+///   "oneOf": [
+///     { "type": "string", "enum": ["Infinite"] },
+///     { "type": "object", "properties": { "Finite": { ... decimal ... } }, "required": ["Finite"] }
+///   ]
+/// }
+/// ```
+///
+/// Returns true if the schema matches this pattern.
+fn is_finite_infinite_pattern(schema: &Value) -> bool {
+    let one_of = match schema.get("oneOf") {
+        Some(Value::Array(arr)) if arr.len() == 2 => arr,
+        _ => return false,
+    };
+
+    let mut has_infinite_string = false;
+    let mut has_finite_object = false;
+
+    for variant in one_of {
+        if let Some(Value::Array(enum_vals)) = variant.get("enum") {
+            // Check for {"type": "string", "enum": ["Infinite"]}
+            if enum_vals.len() == 1
+                && enum_vals[0].as_str() == Some("Infinite")
+            {
+                has_infinite_string = true;
+                continue;
+            }
+        }
+
+        if let Some(Value::Object(props)) = variant.get("properties") {
+            // Check for {"type": "object", "properties": {"Finite": ...}, "required": ["Finite"]}
+            if props.contains_key("Finite") {
+                if let Some(Value::Array(req)) = variant.get("required") {
+                    if req.iter().any(|r| r.as_str() == Some("Finite")) {
+                        has_finite_object = true;
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+
+    has_infinite_string && has_finite_object
+}
+
+/// Resolves a field's schema (potentially via $ref) and checks if it matches
+/// the Finite/Infinite pattern.
+fn detect_finite_pattern_for_field(field_schema: &Value, root_schema: &Value) -> bool {
+    // Direct check
+    if is_finite_infinite_pattern(field_schema) {
+        return true;
+    }
+
+    // Resolve $ref
+    if let Some(Value::String(ref_path)) = field_schema.get("$ref") {
+        let def_name = ref_path
+            .strip_prefix("#/definitions/")
+            .or_else(|| ref_path.strip_prefix("#/$defs/"));
+
+        if let Some(def_name) = def_name {
+            let definition = root_schema
+                .get("definitions")
+                .and_then(|d| d.get(def_name))
+                .or_else(|| root_schema.get("$defs").and_then(|d| d.get(def_name)));
+
+            if let Some(definition) = definition {
+                return is_finite_infinite_pattern(definition);
+            }
+        }
+    }
+
+    false
 }
 
 fn is_primitive_wrapper(schema: &Value) -> bool {
@@ -926,6 +1013,9 @@ fn json_schema_to_sql_type_with_definitions(
                     // Check if this is a primitive wrapper (has only type and optionally format/minimum/maximum)
                     if is_primitive_wrapper(definition) {
                         return json_schema_to_sql_type_with_definitions(definition, definitions);
+                    } else if is_finite_infinite_pattern(definition) {
+                        // Finite/Infinite enum pattern → nullable NUMERIC
+                        return Ok("NUMERIC".to_string());
                     } else {
                         // Complex type, return JSONB
                         return Ok("JSONB".to_string());
