@@ -770,6 +770,75 @@ fn extract_fields_and_events_from_schema(
         });
     }
 
+    // Extract nested Finite/Infinite fields from JSONB columns
+    // e.g. terms.liquidation_cvl, terms.margin_call_cvl, terms.initial_cvl
+    let mut nested_finite_fields = Vec::new();
+    for (name, prop_schema) in &all_properties {
+        // Only inspect fields that resolved to JSONB (complex objects)
+        let sql_type =
+            json_schema_to_sql_type_with_definitions(prop_schema, Some(schema)).unwrap_or_default();
+        if sql_type != "JSONB" {
+            continue;
+        }
+
+        // Resolve the definition to find nested properties
+        let definition = resolve_ref_definition(prop_schema, schema);
+        let definition = definition.as_ref().unwrap_or(prop_schema);
+
+        if let Some(Value::Object(nested_props)) = definition.get("properties") {
+            let mut sorted_nested: Vec<(&String, &Value)> = nested_props.iter().collect();
+            sorted_nested.sort_by_key(|(k, _)| *k);
+
+            for (nested_name, nested_schema) in sorted_nested {
+                if detect_finite_pattern_for_field(nested_schema, schema) {
+                    let flat_name =
+                        format!("{}_{}", to_snake_case(name), to_snake_case(nested_name));
+                    let json_path = format!("{name}.{nested_name}");
+
+                    nested_finite_fields.push(FieldDefinition {
+                        name: flat_name,
+                        sql_type: "NUMERIC".to_string(),
+                        nullable: true,
+                        is_json_extract: true,
+                        json_path,
+                        cast_type: Some("NUMERIC".to_string()),
+                        revoke_events: None,
+                        is_set_field: false,
+                        set_add_events: None,
+                        set_remove_events: None,
+                        set_item_field: None,
+                        is_jsonb_field: false,
+                        element_cast_type: None,
+                        is_jsonb_array: false,
+                        is_toggle_field: false,
+                        toggle_events: None,
+                        is_finite_pattern: true,
+                    });
+                }
+            }
+        }
+    }
+
+    // Add nested finite fields and register them with the event types that carry the parent field
+    for nested_field in &nested_finite_fields {
+        // Extract parent field name from json_path (e.g. "terms.liquidation_cvl" → "terms")
+        let parent_json_name = nested_field
+            .json_path
+            .split('.')
+            .next()
+            .unwrap_or_default();
+        let parent_snake = to_snake_case(parent_json_name);
+
+        // Add this nested field's json_path to any event type that carries the parent field.
+        // compute_event_updates matches on field.json_path against event_type.fields.
+        for event_type in &mut event_types {
+            if event_type.fields.contains(&parent_snake) {
+                event_type.fields.push(nested_field.json_path.clone());
+            }
+        }
+    }
+    fields.extend(nested_finite_fields);
+
     // Add toggle fields for toggle events
     // Sort toggle events for deterministic processing
     let mut sorted_toggle_events: Vec<&str> = toggle_events.to_vec();
@@ -830,6 +899,23 @@ fn extract_fields_and_events_from_schema(
     // Keep event types in schema order (don't sort)
 
     Ok((fields, event_types))
+}
+
+/// Resolves a `$ref` to its definition value, if present.
+fn resolve_ref_definition<'a>(schema: &Value, root_schema: &'a Value) -> Option<&'a Value> {
+    if let Some(Value::String(ref_path)) = schema.get("$ref") {
+        let def_name = ref_path
+            .strip_prefix("#/definitions/")
+            .or_else(|| ref_path.strip_prefix("#/$defs/"));
+
+        if let Some(def_name) = def_name {
+            return root_schema
+                .get("definitions")
+                .and_then(|d| d.get(def_name))
+                .or_else(|| root_schema.get("$defs").and_then(|d| d.get(def_name)));
+        }
+    }
+    None
 }
 
 /// Detects the Rust `enum Foo { Finite(Decimal), Infinite }` JSON schema pattern:
