@@ -1,11 +1,14 @@
+use std::fmt;
+
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "json-schema")]
-use schemars::JsonSchema;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(JsonSchema))]
+/// Collateralization ratio. Serializes as a nullable decimal:
+/// - `Finite(x)` → the decimal value
+/// - `Infinite` → `null`
+///
+/// Deserialization is backwards-compatible with the legacy tagged enum format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CollateralizationRatio {
     Finite(Decimal),
     Infinite,
@@ -14,6 +17,106 @@ pub enum CollateralizationRatio {
 impl Default for CollateralizationRatio {
     fn default() -> Self {
         Self::Finite(Decimal::ZERO)
+    }
+}
+
+impl Serialize for CollateralizationRatio {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            CollateralizationRatio::Finite(d) => serializer.serialize_some(d),
+            CollateralizationRatio::Infinite => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CollateralizationRatio {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de;
+
+        struct Visitor;
+
+        impl<'de> de::Visitor<'de> for Visitor {
+            type Value = CollateralizationRatio;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str(
+                    "a decimal number, null, string \"Infinite\", or object {\"Finite\": ...}",
+                )
+            }
+
+            fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(CollateralizationRatio::Infinite)
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(CollateralizationRatio::Infinite)
+            }
+
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                Ok(CollateralizationRatio::Finite(Decimal::from(v)))
+            }
+
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                Ok(CollateralizationRatio::Finite(Decimal::from(v)))
+            }
+
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+                Decimal::try_from(v)
+                    .map(CollateralizationRatio::Finite)
+                    .map_err(de::Error::custom)
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                if v == "Infinite" {
+                    Ok(CollateralizationRatio::Infinite)
+                } else {
+                    v.parse::<Decimal>()
+                        .map(CollateralizationRatio::Finite)
+                        .map_err(de::Error::custom)
+                }
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let key: String = map
+                    .next_key()?
+                    .ok_or_else(|| de::Error::custom("expected key in map"))?;
+                if key == "Finite" {
+                    let value: Decimal = map.next_value()?;
+                    Ok(CollateralizationRatio::Finite(value))
+                } else {
+                    Err(de::Error::unknown_field(&key, &["Finite"]))
+                }
+            }
+
+            fn visit_some<D: serde::Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<Self::Value, D::Error> {
+                deserializer.deserialize_any(Visitor)
+            }
+        }
+
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
+#[cfg(feature = "json-schema")]
+impl schemars::JsonSchema for CollateralizationRatio {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "CollateralizationRatio".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let decimal_schema = generator.subschema_for::<Decimal>();
+        let null_schema = schemars::json_schema!({ "type": "null" });
+
+        schemars::json_schema!({
+            "description": "Collateralization ratio. null represents Infinite.",
+            "anyOf": [decimal_schema, null_schema]
+        })
     }
 }
 
@@ -187,5 +290,67 @@ mod pending_collateralization_state_sqlx {
         fn array_type_info() -> PgTypeInfo {
             <String as sqlx::postgres::PgHasArrayType>::array_type_info()
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use rust_decimal::Decimal;
+    use rust_decimal_macros::dec;
+
+    use super::*;
+
+    #[test]
+    fn finite_serializes_as_decimal() {
+        let ratio = CollateralizationRatio::Finite(dec!(125));
+        let json = serde_json::to_string(&ratio).unwrap();
+        assert_eq!(json, "\"125\"");
+    }
+
+    #[test]
+    fn infinite_serializes_as_null() {
+        let ratio = CollateralizationRatio::Infinite;
+        let json = serde_json::to_string(&ratio).unwrap();
+        assert_eq!(json, "null");
+    }
+
+    #[test]
+    fn deserializes_new_format() {
+        let ratio: CollateralizationRatio = serde_json::from_str("\"125.50\"").unwrap();
+        assert_eq!(ratio, CollateralizationRatio::Finite(dec!(125.50)));
+
+        let ratio: CollateralizationRatio = serde_json::from_str("null").unwrap();
+        assert_eq!(ratio, CollateralizationRatio::Infinite);
+    }
+
+    #[test]
+    fn deserializes_legacy_format() {
+        let ratio: CollateralizationRatio =
+            serde_json::from_str(r#"{"Finite":"125"}"#).unwrap();
+        assert_eq!(ratio, CollateralizationRatio::Finite(dec!(125)));
+
+        let ratio: CollateralizationRatio = serde_json::from_str(r#""Infinite""#).unwrap();
+        assert_eq!(ratio, CollateralizationRatio::Infinite);
+    }
+
+    #[test]
+    fn roundtrip() {
+        let original = CollateralizationRatio::Finite(dec!(140));
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: CollateralizationRatio = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, deserialized);
+
+        let original = CollateralizationRatio::Infinite;
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: CollateralizationRatio = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn default_is_finite_zero() {
+        assert_eq!(
+            CollateralizationRatio::default(),
+            CollateralizationRatio::Finite(Decimal::ZERO)
+        );
     }
 }

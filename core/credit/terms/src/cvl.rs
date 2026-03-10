@@ -2,18 +2,121 @@ use rust_decimal::{Decimal, prelude::*};
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "json-schema")]
-use schemars::JsonSchema;
-
 use money::UsdCents;
 
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(JsonSchema))]
+/// Collateral-to-Value percentage. Serializes as a nullable decimal:
+/// - `Finite(x)` → the decimal value (e.g. `"140.00"`)
+/// - `Infinite` → `null`
+///
+/// Deserialization is backwards-compatible: accepts both the new flat format
+/// and the legacy tagged enum format (`{"Finite": "140"}` / `"Infinite"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CVLPct {
     Finite(Decimal),
     Infinite,
+}
+
+impl Serialize for CVLPct {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            CVLPct::Finite(d) => serializer.serialize_some(d),
+            CVLPct::Infinite => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CVLPct {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de;
+
+        struct CVLPctVisitor;
+
+        impl<'de> de::Visitor<'de> for CVLPctVisitor {
+            type Value = CVLPct;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str(
+                    "a decimal number, null, string \"Infinite\", or object {\"Finite\": ...}",
+                )
+            }
+
+            // New format: null → Infinite
+            fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(CVLPct::Infinite)
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(CVLPct::Infinite)
+            }
+
+            // New format: number → Finite
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+                Ok(CVLPct::Finite(Decimal::from(v)))
+            }
+
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+                Ok(CVLPct::Finite(Decimal::from(v)))
+            }
+
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+                Decimal::try_from(v)
+                    .map(CVLPct::Finite)
+                    .map_err(de::Error::custom)
+            }
+
+            // Could be legacy "Infinite" string or new decimal-as-string
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                if v == "Infinite" {
+                    Ok(CVLPct::Infinite)
+                } else {
+                    v.parse::<Decimal>()
+                        .map(CVLPct::Finite)
+                        .map_err(de::Error::custom)
+                }
+            }
+
+            // Legacy format: {"Finite": "140"} or new format wrapped in Some
+            fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let key: String = map
+                    .next_key()?
+                    .ok_or_else(|| de::Error::custom("expected key in map"))?;
+                if key == "Finite" {
+                    let value: Decimal = map.next_value()?;
+                    Ok(CVLPct::Finite(value))
+                } else {
+                    Err(de::Error::unknown_field(&key, &["Finite"]))
+                }
+            }
+
+            fn visit_some<D: serde::Deserializer<'de>>(
+                self,
+                deserializer: D,
+            ) -> Result<Self::Value, D::Error> {
+                deserializer.deserialize_any(CVLPctVisitor)
+            }
+        }
+
+        deserializer.deserialize_any(CVLPctVisitor)
+    }
+}
+
+#[cfg(feature = "json-schema")]
+impl schemars::JsonSchema for CVLPct {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "CVLPct".into()
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let decimal_schema = generator.subschema_for::<Decimal>();
+        let null_schema = schemars::json_schema!({ "type": "null" });
+
+        schemars::json_schema!({
+            "description": "Collateral-to-Value percentage. null represents Infinite.",
+            "anyOf": [decimal_schema, null_schema]
+        })
+    }
 }
 
 #[cfg(feature = "graphql")]
@@ -145,6 +248,93 @@ mod test {
     use rust_decimal_macros::dec;
 
     use super::*;
+
+    mod serde_roundtrip {
+        use super::*;
+
+        #[test]
+        fn finite_serializes_as_decimal() {
+            let cvl = CVLPct::Finite(dec!(140));
+            let json = serde_json::to_string(&cvl).unwrap();
+            assert_eq!(json, "\"140\"");
+        }
+
+        #[test]
+        fn infinite_serializes_as_null() {
+            let cvl = CVLPct::Infinite;
+            let json = serde_json::to_string(&cvl).unwrap();
+            assert_eq!(json, "null");
+        }
+
+        #[test]
+        fn deserializes_new_format_decimal() {
+            let cvl: CVLPct = serde_json::from_str("\"140\"").unwrap();
+            assert_eq!(cvl, CVLPct::Finite(dec!(140)));
+        }
+
+        #[test]
+        fn deserializes_new_format_number() {
+            let cvl: CVLPct = serde_json::from_str("140").unwrap();
+            assert_eq!(cvl, CVLPct::Finite(dec!(140)));
+        }
+
+        #[test]
+        fn deserializes_new_format_null() {
+            let cvl: CVLPct = serde_json::from_str("null").unwrap();
+            assert_eq!(cvl, CVLPct::Infinite);
+        }
+
+        #[test]
+        fn deserializes_legacy_tagged_finite() {
+            let cvl: CVLPct = serde_json::from_str(r#"{"Finite":"140"}"#).unwrap();
+            assert_eq!(cvl, CVLPct::Finite(dec!(140)));
+        }
+
+        #[test]
+        fn deserializes_legacy_tagged_infinite() {
+            let cvl: CVLPct = serde_json::from_str(r#""Infinite""#).unwrap();
+            assert_eq!(cvl, CVLPct::Infinite);
+        }
+
+        #[test]
+        fn roundtrip_finite() {
+            let original = CVLPct::Finite(dec!(125.50));
+            let json = serde_json::to_string(&original).unwrap();
+            let deserialized: CVLPct = serde_json::from_str(&json).unwrap();
+            assert_eq!(original, deserialized);
+        }
+
+        #[test]
+        fn roundtrip_infinite() {
+            let original = CVLPct::Infinite;
+            let json = serde_json::to_string(&original).unwrap();
+            let deserialized: CVLPct = serde_json::from_str(&json).unwrap();
+            assert_eq!(original, deserialized);
+        }
+
+        #[test]
+        fn deserializes_in_struct_context() {
+            // Simulates how it appears nested in TermValues JSON
+            #[derive(serde::Deserialize, Debug, PartialEq)]
+            struct Terms {
+                liquidation_cvl: CVLPct,
+                margin_call_cvl: CVLPct,
+            }
+
+            // New format
+            let new_json = r#"{"liquidation_cvl":"105","margin_call_cvl":null}"#;
+            let terms: Terms = serde_json::from_str(new_json).unwrap();
+            assert_eq!(terms.liquidation_cvl, CVLPct::Finite(dec!(105)));
+            assert_eq!(terms.margin_call_cvl, CVLPct::Infinite);
+
+            // Legacy format
+            let legacy_json =
+                r#"{"liquidation_cvl":{"Finite":"105"},"margin_call_cvl":"Infinite"}"#;
+            let terms: Terms = serde_json::from_str(legacy_json).unwrap();
+            assert_eq!(terms.liquidation_cvl, CVLPct::Finite(dec!(105)));
+            assert_eq!(terms.margin_call_cvl, CVLPct::Infinite);
+        }
+    }
 
     #[test]
     fn loan_cvl_pct_scale() {

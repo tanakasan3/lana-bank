@@ -923,13 +923,9 @@ fn json_schema_to_sql_type_with_definitions(
                     .or_else(|| defs.get("$defs").and_then(|d| d.get(def_name)));
 
                 if let Some(definition) = definition {
-                    // Check if this is a primitive wrapper (has only type and optionally format/minimum/maximum)
-                    if is_primitive_wrapper(definition) {
-                        return json_schema_to_sql_type_with_definitions(definition, definitions);
-                    } else {
-                        // Complex type, return JSONB
-                        return Ok("JSONB".to_string());
-                    }
+                    // Recursively resolve the definition — handles primitive wrappers,
+                    // anyOf (nullable types like Finite/Infinite → nullable decimal), etc.
+                    return json_schema_to_sql_type_with_definitions(definition, definitions);
                 }
             }
         }
